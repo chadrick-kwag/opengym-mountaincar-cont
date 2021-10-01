@@ -43,3 +43,8 @@ $ python run_with_ckpt.py -actor_ckpt /path/to/actor.pt \
 
 running inference script like this will run the continuous mountain car for 10 times with the given actor/critic ckpts.
 
+## Trained Checkpoints
+
+Here are the files that I have trained. Download all files in this shared dir
+
+https://drive.google.com/drive/folders/1CGdpC8SYuQPpYU2uc4rnjM3WSwrX8g5z?usp=sharing
