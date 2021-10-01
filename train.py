@@ -5,7 +5,7 @@ environment detail: https://github.com/openai/gym/blob/master/gym/envs/classic_c
 
 """
 
-import torch, gym, datetime, os, json, logging, sys, numpy as np, csv, pickle
+import torch, gym, datetime, os, json, logging, sys, numpy as np, csv, pickle, argparse
 from torch.utils.tensorboard import SummaryWriter
 from munch import Munch
 from model.actor import Actor 
@@ -15,48 +15,46 @@ import sklearn
 import sklearn.preprocessing
 
 #function to normalize states
-def scale_state(state):                 #requires input shape=(2,)
+def scale_state(state, scaler):                 #requires input shape=(2,)
     scaled = scaler.transform([state])
     return scaled[0]                       #returns shape =(1,2)   
 
 if __name__ == '__main__':
 
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('-suffix', type=str, help='train session save string to use as suffix', default=None)
+    parser.add_argument('-actor_lr', type=float, help='actor learning rate', default=0.0001)
+    parser.add_argument('-critic_lr', type =float, help='critic learning rate', default=0.0001)
+    parser.add_argument('-gpu', type=int, help='if using gpu, then provide gpu number', default=None)
+    parser.add_argument('-epinum', type=int, help='number of episodes to train', default=1000)
+    parser.add_argument('-patient_epinum', type=int, help='episode count to wait for first success', default=10)
+    parser.add_argument('-gamma', type=float, help='reward diminish gamma value', default=0.99)
+
+
+    args = parser.parse_args()
+
     # prepare output dir
     timestamp=datetime.datetime.now().strftime("%y%m%d_%H%M%S")
-    suffix = 'add_max_step_200'
+    suffix = args.suffix
 
-    outputdir = f"ckpt/t1/{timestamp}_{suffix}"
+    outputdir = f"ckpt/{timestamp}_{suffix}"
     os.makedirs(outputdir)
 
 
-    # setup logger
-    debuglogger = logging.getLogger("debug")
-    debuglogger.setLevel(logging.DEBUG)
-
-    savepath = os.path.join(outputdir, 'debug.log')
-    debuglogger_fh = logging.FileHandler(savepath,mode='w')
-    debuglogger_fh.setLevel(logging.DEBUG)
-
-
-    debuglogger_sh = logging.StreamHandler(sys.stdout)
-    debuglogger_sh.setLevel(logging.DEBUG)
-
-    debuglogger.addHandler(debuglogger_fh)
-    debuglogger.addHandler(debuglogger_sh)
-
-    logger = debuglogger
 
     env = gym.envs.make("MountainCarContinuous-v0")
 
 
-    usedconfig = Munch()
+    usedconfig = Munch(vars(args))
 
 
     state_size = 2
     action_size = 1
 
-    actor_lr = 0.0001
-    critic_lr = 0.0001
+    actor_lr = args.actor_lr
+    critic_lr = args.critic_lr
 
     usedconfig.actor_lr = actor_lr
     usedconfig.critic_lr = critic_lr
@@ -81,18 +79,18 @@ if __name__ == '__main__':
         pickle.dump(scaler, fd)
 
 
-
-
-
-
+    ## prepare tensorboard output dir
     logdir = os.path.join(outputdir, 'logs')
     os.makedirs(logdir)
 
     writer = SummaryWriter(logdir)
 
+    if args.gpu is None:
+        device = torch.device('cpu')
+    else:
+        device = torch.device(f'cuda:{args.gpu}')
 
-    device = torch.device('cuda:0')
-
+    # setup actor/critic model
     actor = Actor(state_size).to(device)
     critic = Critic(state_size).to(device)
 
@@ -102,15 +100,18 @@ if __name__ == '__main__':
     critic_opt = torch.optim.Adam(critic.parameters(), lr=critic_lr)
 
 
-    epi_num = 10000
+    epi_num = args.epinum
+    assert epi_num > 0, 'epi num not >0'
     max_acc_reward = None
 
-    success_patient_epi_num = 10
+    # number of episodes to wait until to reach first success state
+    success_patient_epi_num = args.patient_epinum
+    assert success_patient_epi_num > 0, 'success patient epi num not >0'
+    
 
     restart_count = 0
 
 
-    # save run info
     usedconfig.epi_num = epi_num
     usedconfig.success_patient_epi_num = success_patient_epi_num
 
@@ -119,7 +120,8 @@ if __name__ == '__main__':
     with open(savepath , 'w') as fd:
         json.dump(usedconfig, fd, indent=4, ensure_ascii=False)
 
-
+    # only keep on training when success state has been reached within a number of attempts.
+    # if fail to do so, then reset actor/critics weights and try again to reach success state
     success_reached=False
 
     epi_index = 0
@@ -129,7 +131,7 @@ if __name__ == '__main__':
     for _ in range(epi_num):
 
         if patient_count > success_patient_epi_num and success_reached is False:
-            logger.info(f"### failed to reach success with in patient rounds: {success_patient_epi_num}. restart_count={restart_count}")
+            print(f"### failed to reach success with in patient rounds: {success_patient_epi_num}. restart_count={restart_count}")
 
             restart_count+=1
 
@@ -140,8 +142,9 @@ if __name__ == '__main__':
             patient_count =0
             
 
+        # for each episode, keep track of rewards, states, logprobs, value of all steps
         state = env.reset()
-        state = scale_state(state)
+        state = scale_state(state, scaler)
 
         state = torch.FloatTensor(state).to(device)
 
@@ -151,14 +154,12 @@ if __name__ == '__main__':
         rewards = []
         log_probs = []
         curr_values = []
-        acc_reward = 0
-        entropy = 0
+        acc_reward = 0 # for tracking overall performance
+        entropy = 0 # not used in loss. tracking for viewing
 
         while True:
 
             step_count += 1
-
-            # env.render()
 
             dist = actor(state)
 
@@ -169,14 +170,12 @@ if __name__ == '__main__':
 
             
             log_prob = dist.log_prob(a).unsqueeze(0)
-            # print(log_prob)
 
             log_probs.append(log_prob)
 
-            # print(action)
-
             action_val = action.item()
 
+            # clip action value
             if action_val >1:
                 action_val = 1.0
             elif action_val <-1:
@@ -185,10 +184,13 @@ if __name__ == '__main__':
             next_state, reward, done, _ = env.step([action_val])
 
             if step_count > max_step:
+                # if step exceed max step. abort episode. give negative reward manually(optional.)
+                # the mountain car cont. environment doesn't seem to finish itself after 200 steps even 
+                # though the docstrings say that it terminates after 200 steps.
                 reward = -100
                 done = True
         
-            next_state = scale_state(next_state)
+            next_state = scale_state(next_state, scaler)
 
             acc_reward += reward
 
@@ -213,7 +215,7 @@ if __name__ == '__main__':
         advantages = []
         returns = []
         r = 0
-        gamma = 0.99
+        gamma = args.gamma 
         for reward in reversed(rewards):
             r = reward + gamma * r
             returns.insert(0, r)
@@ -239,7 +241,7 @@ if __name__ == '__main__':
 
         print(f"epi:{epi_index}, steps={step_count}, entropy={entropy.item()}, acc_reward={acc_reward} actor_loss: {actor_loss.item()}, critic_loss: {critic_loss.item()}")
 
-
+        # save progress to tensorboard writer
         writer.add_scalar('train/actor_loss', actor_loss.item(), epi_index)
         writer.add_scalar('train/critic_loss', critic_loss.item(), epi_index)
         writer.add_scalar('train/steps', step_count, epi_index)
