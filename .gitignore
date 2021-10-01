@@ -1,0 +1,5 @@
+.vscode
+**/testinput
+**/ckpt
+**/testoutput
+**/__pycache__
