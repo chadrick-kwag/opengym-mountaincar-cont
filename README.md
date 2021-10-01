@@ -1,6 +1,15 @@
 # Mountain Car Continuous OpenGym Actor-Critic Model
 
 
+## Environment
+
+- Ubuntu 20.04.3
+- pytorch 1.9.0
+- cuda 10.1
+- python 3.8.10
+
+checkout `requirements.txt` for used python packages
+
 ## How to Train 
 
 
