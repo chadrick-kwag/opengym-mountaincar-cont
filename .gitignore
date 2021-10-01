@@ -3,3 +3,8 @@
 **/ckpt
 **/testoutput
 **/__pycache__
+venv
+
+**/config/**/*.yaml
+!**/config/**/sample.yaml
+**/*.sh
